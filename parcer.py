@@ -7,11 +7,25 @@ from dateutil import parser
 from dateutil.relativedelta import relativedelta
 import re
 
-# API ключ для доступа к YouTube Data API
-API_KEY = "Your API Key Here"
+# Функция для загрузки API ключей из файла
+def load_api_keys(file_path):
+    with open(file_path, 'r') as file:
+        return json.load(file)
 
-# Инициализация клиента YouTube API
-youtube = build('youtube', 'v3', developerKey=API_KEY)
+# Функция для сохранения последнего рабочего API ключа
+def save_last_working_key_index(file_path, index):
+    with open(file_path, 'r+') as file:
+        data = json.load(file)
+        data['last_working_key_index'] = index
+        file.seek(0)
+        json.dump(data, file)
+        file.truncate()
+
+# Функция для инициализации клиента YouTube API
+def initialize_youtube(api_keys, start_index=0):
+    current_index = start_index
+    youtube = build('youtube', 'v3', developerKey=api_keys[current_index])
+    return youtube, current_index
 
 # Функция для загрузки уже обработанных каналов из файла
 def load_seen_channels(file_path):
@@ -30,8 +44,30 @@ def save_seen_channels(file_path, seen_channels):
     with open(file_path, 'w') as file:
         json.dump(list(seen_channels), file)
 
+# Функция для обработки ошибок и переключения между API ключами
+def handle_api_error(e, api_keys, current_index):
+    if 'quotaExceeded' in str(e):
+        print(f"API {current_index + 1} не работает, проверяю следующий.")
+        current_index += 1
+        if current_index >= len(api_keys):
+            print("Все API ключи перегружены.")
+            return None, current_index
+        youtube = build('youtube', 'v3', developerKey=api_keys[current_index])
+        return youtube, current_index
+    else:
+        print(f"Произошла ошибка: {e}")
+        return None, current_index
+
+# Загрузка API ключей и инициализация клиента YouTube API
+api_keys_data = load_api_keys('api_keys.json')
+api_keys = api_keys_data['keys']
+last_working_key_index = api_keys_data.get('last_working_key_index', 0)
+youtube, current_api_key_index = initialize_youtube(api_keys, last_working_key_index)
+
 # Функция для поиска каналов по запросу
 def search_channels(query, region_codes=["RU", "UA", "BY", "KZ"], seen_channels=None, max_channels=200):
+    global youtube, current_api_key_index
+
     if seen_channels is None:
         seen_channels = set()
 
@@ -67,16 +103,16 @@ def search_channels(query, region_codes=["RU", "UA", "BY", "KZ"], seen_channels=
                     break
 
             except googleapiclient.errors.HttpError as e:
-                if 'quotaExceeded' in str(e):
-                    print("Превышена квота API. Попробуйте позже.")
+                youtube, current_api_key_index = handle_api_error(e, api_keys, current_api_key_index)
+                if youtube is None:
                     return channels
-                else:
-                    print(f"Ошибка при поиске каналов для региона {region}: {e}")
-                    continue
+
     return channels
 
 # Функция для получения деталей канала
 def get_channel_details(channel_ids):
+    global youtube, current_api_key_index
+
     details_list = []
     # Разбиваем запросы на части по 50 каналов
     for i in range(0, len(channel_ids), 50):
@@ -87,16 +123,16 @@ def get_channel_details(channel_ids):
             ).execute()
             details_list.extend(response.get('items', []))
         except googleapiclient.errors.HttpError as e:
-            if 'quotaExceeded' in str(e):
-                print("Превышена квота API. Попробуйте позже.")
+            youtube, current_api_key_index = handle_api_error(e, api_keys, current_api_key_index)
+            if youtube is None:
                 break
-            else:
-                print(f"Ошибка при получении деталей каналов: {e}")
-                break
+
     return details_list
 
 # Функция для получения даты последнего видео в плейлисте
 def get_last_video_date(uploads_playlist_id):
+    global youtube, current_api_key_index
+
     try:
         response = youtube.playlistItems().list(
             playlistId=uploads_playlist_id,
@@ -113,14 +149,13 @@ def get_last_video_date(uploads_playlist_id):
         return parser.isoparse(last_video_date), last_video_description
 
     except googleapiclient.errors.HttpError as e:
-        if 'quotaExceeded' in str(e):
-            print("Превышена квота API. Попробуйте позже.")
+        if 'playlistNotFound' in str(e):
             return None, None
-        elif 'playlistNotFound' in str(e):
+        youtube, current_api_key_index = handle_api_error(e, api_keys, current_api_key_index)
+        if youtube is None:
             return None, None
-        else:
-            print(f"Ошибка при получении последнего видео для плейлиста {uploads_playlist_id}: {e}")
-        return None, None
+
+    return None, None
 
 # Функция для вычисления разницы во времени
 def get_time_difference(last_upload_date):
@@ -179,7 +214,7 @@ def contains_gambling_keywords(description):
     return any(keyword in description.lower() for keyword in gambling_keywords)
 
 # Функция для поиска неактивных каналов
-def find_inactive_channels(query, min_subs=80000, max_subs=1000000, inactive_months=6, region_codes=["RU", "UA", "BY", "KZ"], seen_channels=None, max_channels=200):
+def find_inactive_channels(query, min_subs=2000, max_subs=1000000, inactive_months=6, region_codes=["RU", "UA", "BY", "KZ"], seen_channels=None, max_channels=200):
     if seen_channels is None:
         seen_channels = set()
 
@@ -198,7 +233,6 @@ def find_inactive_channels(query, min_subs=80000, max_subs=1000000, inactive_mon
         if not details_list:
             break
 
-        print(f"Проверка {len(details_list)} каналов на неактивность (интервал: {inactive_months} месяцев)")
         for details in details_list:
             total_channels_analyzed += 1
 
@@ -231,12 +265,10 @@ def find_inactive_channels(query, min_subs=80000, max_subs=1000000, inactive_mon
                         if channel_info['region'] in region_codes:
                             inactive_channels.append(channel_info)
                             time_since_last_video = get_time_difference(channel_info['last_upload_date'])
-                            telegram_location = "в описании канала" if telegram_in_description else "в описании видео"
-                            telegram_status = f"Ссылка на Telegram {telegram_location}." if telegram_link else ""
                             print(
-                                f"Название: {channel_info['title']}, Подписчики: {channel_info['subscriber_count']}, "
-                                f"Количество видео: {channel_info['video_count']}, Последнее видео: {time_since_last_video}, Регион: {channel_info['region']} "
-                                f"{telegram_status}")
+                                f"{len(inactive_channels)}. Название: {channel_info['title']}, Подписчики: {channel_info['subscriber_count']}, "
+                                f"Последнее видео: {time_since_last_video}, Регион: {channel_info['region']}"
+                            )
 
         if len(channels) < max_channels - total_channels_analyzed:
             break
@@ -246,39 +278,67 @@ def find_inactive_channels(query, min_subs=80000, max_subs=1000000, inactive_mon
 
     return inactive_channels, seen_channels, total_channels_analyzed
 
+def extract_email(description):
+    email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+    match = email_pattern.search(description)
+    if match:
+        return match.group()
+    return None
+
+def ask_continue():
+    while True:
+        response = input("Continue? (Y/N): ").strip().lower()
+        if response in ['y', 'yes', '']:
+            return True
+        elif response in ['n', 'no']:
+            return False
+        else:
+            print("Invalid input. Please enter Y or N.")
+
+# Основной блок
 if __name__ == "__main__":
     try:
-        query = input("Введите запрос для поиска каналов: ")
-        max_channels = int(input("Введите максимальное количество каналов для анализа: "))
+        while True:
+            query = input("Введите запрос для поиска каналов: ")
+            max_channels = int(input("Введите максимальное количество каналов для анализа: "))
 
-        # Параметры фильтрации
-        min_subs = 5000
-        max_subs = 1000000
-        region_codes = ["RU", "UA", "BY", "KZ"]
-        seen_channels_file = 'seen_channels.json'
+            # Параметры фильтрации
+            min_subs = 2000
+            max_subs = 1000000
+            region_codes = ["RU", "UA", "BY", "KZ"]
+            seen_channels_file = 'seen_channels.json'
 
-        seen_channels = load_seen_channels(seen_channels_file)
+            seen_channels = load_seen_channels(seen_channels_file)
 
-        print(f"Начинаем поиск каналов по запросу: {query}")
-        inactive_channels, seen_channels, total_channels_analyzed = find_inactive_channels(
-            query, min_subs=min_subs, max_subs=max_subs, region_codes=region_codes, seen_channels=seen_channels, max_channels=max_channels
-        )
+            inactive_channels, seen_channels, total_channels_analyzed = find_inactive_channels(
+                query, min_subs=min_subs, max_subs=max_subs, region_codes=region_codes, seen_channels=seen_channels, max_channels=max_channels
+            )
 
-        save_seen_channels(seen_channels_file, seen_channels)
+            save_seen_channels(seen_channels_file, seen_channels)
 
-        print(f"\nОбработано {total_channels_analyzed} каналов.")
-        if inactive_channels:
-            print(f"Найдено {len(inactive_channels)} неактивных каналов:\n")
-            for idx, channel in enumerate(inactive_channels, start=1):
-                time_since_last_video = get_time_difference(channel['last_upload_date'])
-                print(
-                    f"{idx}. Название: {channel['title']}, Подписчики: {channel['subscriber_count']}, "
-                    f"Последнее видео: {time_since_last_video}, Регион: {channel['region']}"
-                )
-        else:
-            print("Неактивных каналов по заданным критериям не найдено.")
+            if inactive_channels:
+                print(f"\nСсылки на Telegram для найденных каналов:")
+                for idx, channel in enumerate(inactive_channels, start=1):
+                    telegram_in_description, telegram_link = contains_telegram_link(channel['description'])
+                    if telegram_link:
+                        print(f"{idx}. Название: {channel['title']}, {telegram_link}")
+            else:
+                print("Неактивных каналов по заданным критериям не найдено.")
+
+            print(f"\nОбработано {total_channels_analyzed} каналов.")
+
+            # Сохранение последнего рабочего API ключа
+            save_last_working_key_index('api_keys.json', current_api_key_index)
+
+            if not ask_continue():
+                break
 
     except KeyboardInterrupt:
         print("\nПоиск прерван пользователем.")
+    except googleapiclient.errors.HttpError as e:
+        if 'quotaExceeded' in str(e):
+            print("Превышена квота API. Поиск остановлен.")
+        else:
+            print(f"Произошла ошибка: {e}")
     except Exception as e:
         print(f"Произошла ошибка: {e}")
