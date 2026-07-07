@@ -4,6 +4,8 @@ Find inactive YouTube channels based on search queries and predefined filtering 
 
 ChannelFreeze helps discover abandoned or inactive YouTube channels by analyzing subscriber count, upload activity and channel metadata.
 
+![ChannelFreeze terminal usage](docs/screenshots/channel-freeze.svg)
+
 ---
 
 ## Features
@@ -28,10 +30,17 @@ ChannelFreeze helps discover abandoned or inactive YouTube channels by analyzing
 
 ## Setup
 
-1. Clone the repository.
+1. Create and activate a Python environment:
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+
 2. Install dependencies:
 
    ```bash
+   pip install -U pip
    pip install -r requirements.txt
    ```
 
@@ -55,6 +64,15 @@ python parser.py
 
 The script prompts for a search query and the maximum number of channels to analyze.
 
+Example:
+
+```text
+Enter a channel search query: gaming
+Enter the maximum number of channels to analyze: 100
+Channel search started...
+1. Title: Example Channel, Subscribers: 12450, Last video: 11 months ago, Region: UA
+```
+
 Current default filters:
 
 - subscriber count between `2,000` and `1,000,000`
@@ -63,6 +81,16 @@ Current default filters:
 - regions: `RU`, `UA`, `BY`, `KZ`
 
 The script stores processed channel IDs in `seen_channels.json` to avoid duplicate analysis between runs.
+
+## Repository layout
+
+```text
+.
+├── parser.py
+├── requirements.txt
+├── api_keys.example.json
+└── docs/screenshots/
+```
 
 ---
 

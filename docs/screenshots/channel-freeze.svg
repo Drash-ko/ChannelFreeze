@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="420" viewBox="0 0 920 420" role="img" aria-label="ChannelFreeze terminal usage">
+  <rect width="920" height="420" rx="12" fill="#0b1120"/>
+  <rect x="0" y="0" width="920" height="38" rx="12" fill="#1e293b"/>
+  <circle cx="24" cy="19" r="6" fill="#ff5f56"/>
+  <circle cx="46" cy="19" r="6" fill="#ffbd2e"/>
+  <circle cx="68" cy="19" r="6" fill="#27c93f"/>
+  <text x="24" y="74" fill="#e2e8f0" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18">$ python parser.py</text>
+  <text x="24" y="116" fill="#bae6fd" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18">Enter a channel search query: gaming</text>
+  <text x="24" y="154" fill="#bae6fd" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18">Enter the maximum number of channels to analyze: 100</text>
+  <text x="24" y="198" fill="#f8fafc" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18">Channel search started...</text>
+  <text x="24" y="238" fill="#a7f3d0" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18">1. Title: Example Channel, Subscribers: 12450, Last video: 11 months ago, Region: UA</text>
+  <text x="24" y="278" fill="#a7f3d0" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18">2. Title: Research Archive, Subscribers: 8320, Last video: 1 year ago, Region: KZ</text>
+  <text x="24" y="334" fill="#facc15" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18">Telegram links for matching channels:</text>
+  <text x="24" y="374" fill="#e2e8f0" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18">Analyzed 100 channels.</text>
+</svg>

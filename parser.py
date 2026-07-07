@@ -1,20 +1,27 @@
-import os
-import json
-from googleapiclient.discovery import build
 import datetime
+import json
+import os
+import re
+
 import googleapiclient.errors
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
-import re
+from googleapiclient.discovery import build
 
-# Load API keys from a JSON file.
+
+DEFAULT_REGION_CODES = ("RU", "UA", "BY", "KZ")
+GAMBLING_KEYWORDS = ("казино", "ставки", "беттинг", "gambling", "casino", "betting")
+YOUTUBE_MAX_BATCH_SIZE = 50
+
+
 def load_api_keys(file_path):
+    """Load YouTube API keys and cursor metadata from a JSON file."""
     with open(file_path, 'r') as file:
         return json.load(file)
 
 
-# Save the index of the last working API key.
 def save_last_working_key_index(file_path, index):
+    """Persist the last successful API-key index between runs."""
     with open(file_path, 'r+') as file:
         data = json.load(file)
         data['last_working_key_index'] = index
@@ -23,15 +30,15 @@ def save_last_working_key_index(file_path, index):
         file.truncate()
 
 
-# Initialize the YouTube API client.
 def initialize_youtube(api_keys, start_index=0):
+    """Create a YouTube Data API client for the selected API key."""
     current_index = start_index
     youtube = build('youtube', 'v3', developerKey=api_keys[current_index])
     return youtube, current_index
 
 
-# Load channels that were already processed.
 def load_seen_channels(file_path):
+    """Load channel IDs that were already analyzed in previous runs."""
     if not os.path.exists(file_path):
         with open(file_path, 'w') as file:
             json.dump([], file)
@@ -43,14 +50,14 @@ def load_seen_channels(file_path):
     return seen_channels
 
 
-# Save processed channels to a JSON file.
 def save_seen_channels(file_path, seen_channels):
+    """Save processed channel IDs so future runs can skip duplicates."""
     with open(file_path, 'w') as file:
         json.dump(list(seen_channels), file)
 
 
-# Handle API errors and rotate API keys when quota is exceeded.
 def handle_api_error(e, api_keys, current_index):
+    """Rotate API keys when YouTube quota is exceeded."""
     if 'quotaExceeded' in str(e):
         print(f"API key {current_index + 1} reached its quota. Checking the next key.")
         current_index += 1
@@ -62,6 +69,7 @@ def handle_api_error(e, api_keys, current_index):
     else:
         print(f"An error occurred: {e}")
         return None, current_index
+
 
 api_keys = []
 current_api_key_index = 0
@@ -77,8 +85,8 @@ def initialize_from_config(file_path='api_keys.json'):
     youtube, current_api_key_index = initialize_youtube(api_keys, last_working_key_index)
 
 
-# Search for channels by query.
-def search_channels(query, region_codes=["RU", "UA", "BY", "KZ"], seen_channels=None, max_channels=200):
+def search_channels(query, region_codes=DEFAULT_REGION_CODES, seen_channels=None, max_channels=200):
+    """Search YouTube channels by query across the configured regions."""
     global youtube, current_api_key_index
 
     if seen_channels is None:
@@ -93,7 +101,7 @@ def search_channels(query, region_codes=["RU", "UA", "BY", "KZ"], seen_channels=
                     q=query,
                     type="channel",
                     part="snippet",
-                    maxResults=min(50, max_channels - len(channels)),  # YouTube API allows up to 50 results per request.
+                    maxResults=min(YOUTUBE_MAX_BATCH_SIZE, max_channels - len(channels)),
                     regionCode=region,
                     pageToken=next_page_token
                 ).execute()
@@ -123,16 +131,15 @@ def search_channels(query, region_codes=["RU", "UA", "BY", "KZ"], seen_channels=
     return channels
 
 
-# Fetch channel details.
 def get_channel_details(channel_ids):
+    """Fetch channel metadata in API-sized batches."""
     global youtube, current_api_key_index
 
     details_list = []
-    # Split requests into batches of 50 channels.
-    for i in range(0, len(channel_ids), 50):
+    for i in range(0, len(channel_ids), YOUTUBE_MAX_BATCH_SIZE):
         try:
             response = youtube.channels().list(
-                id=','.join(channel_ids[i:i+50]),
+                id=','.join(channel_ids[i:i + YOUTUBE_MAX_BATCH_SIZE]),
                 part="snippet,statistics,contentDetails"
             ).execute()
             details_list.extend(response.get('items', []))
@@ -144,8 +151,8 @@ def get_channel_details(channel_ids):
     return details_list
 
 
-# Get the publish date and description of the latest video in a playlist.
 def get_last_video_date(uploads_playlist_id):
+    """Return the latest upload date and description for a channel uploads playlist."""
     global youtube, current_api_key_index
 
     try:
@@ -173,8 +180,8 @@ def get_last_video_date(uploads_playlist_id):
     return None, None
 
 
-# Format the time elapsed since the last upload.
 def get_time_difference(last_upload_date):
+    """Format a relative age for the latest upload timestamp."""
     now = datetime.datetime.now(datetime.timezone.utc)
     diff = relativedelta(now, last_upload_date)
 
@@ -197,8 +204,8 @@ def get_time_difference(last_upload_date):
         return "less than a minute ago"
 
 
-# Check whether a description contains a Telegram link.
 def contains_telegram_link(description):
+    """Return whether text contains a Telegram link and the first match."""
     telegram_pattern = re.compile(r't\.me/[a-zA-Z0-9_]+')
     match = telegram_pattern.search(description)
     if match:
@@ -206,14 +213,21 @@ def contains_telegram_link(description):
     return False, None
 
 
-# Check whether a description contains gambling-related keywords.
 def contains_gambling_keywords(description):
-    gambling_keywords = ["казино", "ставки", "беттинг", "gambling", "casino", "betting"]
-    return any(keyword in description.lower() for keyword in gambling_keywords)
+    """Detect gambling-related terms in English and target regional languages."""
+    return any(keyword in description.lower() for keyword in GAMBLING_KEYWORDS)
 
 
-# Find inactive channels matching the configured filters.
-def find_inactive_channels(query, min_subs=2000, max_subs=1000000, inactive_months=6, region_codes=["RU", "UA", "BY", "KZ"], seen_channels=None, max_channels=200):
+def find_inactive_channels(
+    query,
+    min_subs=2000,
+    max_subs=1000000,
+    inactive_months=6,
+    region_codes=DEFAULT_REGION_CODES,
+    seen_channels=None,
+    max_channels=200,
+):
+    """Find inactive channels matching subscriber, region, and content filters."""
     if seen_channels is None:
         seen_channels = set()
 
@@ -223,7 +237,12 @@ def find_inactive_channels(query, min_subs=2000, max_subs=1000000, inactive_mont
     threshold_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=inactive_months * 30)
 
     while total_channels_analyzed < max_channels:
-        channels = search_channels(query, region_codes=region_codes, seen_channels=seen_channels, max_channels=max_channels - total_channels_analyzed)
+        channels = search_channels(
+            query,
+            region_codes=region_codes,
+            seen_channels=seen_channels,
+            max_channels=max_channels - total_channels_analyzed,
+        )
         if not channels:
             break
 
@@ -278,11 +297,13 @@ def find_inactive_channels(query, min_subs=2000, max_subs=1000000, inactive_mont
     return inactive_channels, seen_channels, total_channels_analyzed
 
 def extract_email(description):
+    """Return the first email address found in a description."""
     email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
     match = email_pattern.search(description)
     if match:
         return match.group()
     return None
+
 
 def ask_continue():
     while True:
@@ -294,6 +315,7 @@ def ask_continue():
         else:
             print("Invalid input. Please enter Y or N.")
 
+
 if __name__ == "__main__":
     try:
         initialize_from_config()
@@ -302,16 +324,20 @@ if __name__ == "__main__":
             query = input("Enter a channel search query: ")
             max_channels = int(input("Enter the maximum number of channels to analyze: "))
 
-            # Filtering options.
             min_subs = 2000
             max_subs = 1000000
-            region_codes = ["RU", "UA", "BY", "KZ"]
+            region_codes = DEFAULT_REGION_CODES
             seen_channels_file = 'seen_channels.json'
 
             seen_channels = load_seen_channels(seen_channels_file)
 
             inactive_channels, seen_channels, total_channels_analyzed = find_inactive_channels(
-                query, min_subs=min_subs, max_subs=max_subs, region_codes=region_codes, seen_channels=seen_channels, max_channels=max_channels
+                query,
+                min_subs=min_subs,
+                max_subs=max_subs,
+                region_codes=region_codes,
+                seen_channels=seen_channels,
+                max_channels=max_channels,
             )
 
             save_seen_channels(seen_channels_file, seen_channels)
@@ -327,7 +353,6 @@ if __name__ == "__main__":
 
             print(f"\nAnalyzed {total_channels_analyzed} channels.")
 
-            # Save the last working API key.
             save_last_working_key_index('api_keys.json', current_api_key_index)
 
             if not ask_continue():
